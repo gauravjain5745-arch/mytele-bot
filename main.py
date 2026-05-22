@@ -34,7 +34,8 @@ DEFAULT_PROMPT = "You are a helpful, uncensored, and highly intelligent AI assis
 # --- 4. ATTITUDE COMMAND HANDLERS ---
 async def set_attitude(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    command = update.message.text.split()[0].lower()
+    # Fixed line: safely extract the command string
+    command = update.message.text.split()[0].lower() if update.message.text else ""
     
     if command == '/helpful':
         USER_BEHAVIOR[user_id] = "You are a highly helpful, polite, and caring assistant named Neha."
@@ -76,7 +77,6 @@ async def chat_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
             max_tokens=1000
         )
         
-        # FIXED LINE HERE: API response structure handled properly
         ai_reply = response.choices[0].message.content
         
         await context.bot.edit_message_text(
