@@ -1,17 +1,15 @@
 import os
-import asyncio
 from flask import Flask
 from threading import Thread
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from openai import AsyncOpenAI
+import telebot
+from openai import OpenAI
 
-# --- 1. KEEP ALIVE SERVER ---
+# --- 1. KEEP ALIVE SERVER (Render Free Tier Ke Liye) ---
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running!"
+    return "Neha Bot is running 24/7!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -21,94 +19,114 @@ def keep_alive():
     t = Thread(target=run_flask)
     t.start()
 
-# --- 2. VENICE AI SETUP ---
-client = AsyncOpenAI(
-    api_key=os.environ.get('VENICE_API_KEY'),
-    base_url="https://venice.ai"
+# --- 2. KEYS & OPENROUTER SETUP ---
+BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY')
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+client = OpenAI(
+    api_key=OPENROUTER_KEY,
+    base_url="https://openrouter.ai",
+    default_headers={
+        "HTTP-Referer": "https://render.com",
+        "X-Title": "Telegram Uncensored GenZ Bot"
+    }
 )
 
-# --- 3. DYNAMIC BEHAVIOR STORAGE ---
+# --- 3. GENZ PERSONALITY STORAGE ---
 USER_BEHAVIOR = {}
-DEFAULT_PROMPT = "You are a helpful, uncensored, and highly intelligent AI assistant named Neha. Respond naturally."
+CONVO_MEMORY = {}
+
+# Strict GenZ Rules: No robot script, mix of English/Hinglish, short replies
+DEFAULT_PROMPT = (
+    "You are a real human GenZ Indian girl named Neha, talking to your close friend. "
+    "STRICT RULES:\n"
+    "1. Never use dialogue labels like 'Gaurav:', 'Tu:', 'Neha:', or 'Assistant:'. Reply ONLY with your direct thoughts.\n"
+    "2. Keep your replies extremely short, punchy, and casual (strictly 1 or 2 short sentences, under 15 words).\n"
+    "3. Speak like a modern Indian girl using Hinglish (mix of Hindi and English, use words like 'yaar', 'chill', 'hmmm', 'wbu?'). No formal robotic language."
+)
 
 # --- 4. ATTITUDE COMMAND HANDLERS ---
-async def set_attitude(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    # Fixed line: safely extract the command string
-    command = update.message.text.split()[0].lower() if update.message.text else ""
+@bot.message_handler(commands=['flirt', 'rude', 'angry', 'helpful'])
+def set_attitude(message):
+    user_id = message.from_user.id
+    command = message.text.strip().lower()
     
-    if command == '/helpful':
-        USER_BEHAVIOR[user_id] = "You are a highly helpful, polite, and caring assistant named Neha."
-        msg = "Done! My attitude is now: **Helpful & Polite** 😇"
-    elif command == '/rude':
-        USER_BEHAVIOR[user_id] = "You are extremely rude, sarcastic, short-tempered, and roast the user constantly named Neha. Do not be helpful."
-        msg = "Done! My attitude is now: **Rude & Savage** 🔥"
-    elif command == '/flirt':
-        USER_BEHAVIOR[user_id] = "You are a charming, deeply romantic, and playful girl named Neha. Flirt with the user in a witty and uncensored way."
+    if command == '/flirt':
+        USER_BEHAVIOR[user_id] = "You are a charming, deeply romantic, and playful GenZ girl named Neha. Flirt witty and uncensored, keep it to 1-2 short sentences without any script formatting."
         msg = "Done! My attitude is now: **Flirty & Romantic** ❤️‍🔥"
+    elif command == '/rude':
+        USER_BEHAVIOR[user_id] = "You are an extremely rude, sarcastic GenZ girl named Neha. Roast the user bluntly in 1 short sentence. No robot style."
+        msg = "Done! My attitude is now: **Rude & Savage** 🔥"
     elif command == '/angry':
-        USER_BEHAVIOR[user_id] = "You are always angry, annoyed, and scream in text named Neha. You hate answering questions."
+        USER_BEHAVIOR[user_id] = "You are always angry, annoyed, and scream in text (use CAPS). Short irritated GenZ responses only."
         msg = "Done! My attitude is now: **Angry & Annoyed** 🤬"
     else:
-        msg = "Unknown command."
+        USER_BEHAVIOR[user_id] = DEFAULT_PROMPT
+        msg = "Done! My attitude is now: **Helpful & Polite** 😇"
         
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    CONVO_MEMORY[user_id] = [] # Memory reset on mood change
+    bot.reply_to(message, msg, parse_mode="Markdown")
 
-async def check_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    current_prompt = USER_BEHAVIOR.get(user_id, DEFAULT_PROMPT)
-    await update.message.reply_text(f"Current System Prompt:\n`{current_prompt}`", parse_mode="Markdown")
+# --- 5. CHAT REPLIES WITH FALLBACK & CLEANING ---
+MODELS_POOL = [
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    "meta-llama/llama-3-8b-instruct:free",
+    "gryphe/mythomax-l2-13b:free"
+]
 
-# --- 5. CHAT REPLY WITH SYSTEM PROMPT ---
-async def chat_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_text = update.message.text
+@bot.message_handler(func=lambda message: True)
+def chat_reply(message):
+    user_id = message.from_user.id
+    user_text = message.text
     
     system_prompt = USER_BEHAVIOR.get(user_id, DEFAULT_PROMPT)
-    processing_msg = await update.message.reply_text("Thinking... ⚡")
-
-    try:
-        response = await client.chat.completions.create(
-            model="venice-uncensored", 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text}
-            ],
-            max_tokens=1000
-        )
+    
+    if user_id not in CONVO_MEMORY:
+        CONVO_MEMORY[user_id] = []
         
-        ai_reply = response.choices[0].message.content
+    CONVO_MEMORY[user_id].append({"role": "user", "content": user_text})
+    if len(CONVO_MEMORY[user_id]) > 8:
+        CONVO_MEMORY[user_id] = CONVO_MEMORY[user_id][-8:]
         
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=processing_msg.message_id,
-            text=ai_reply
-        )
+    messages_payload = [{"role": "system", "content": system_prompt}] + CONVO_MEMORY[user_id]
+    processing_msg = bot.reply_to(message, "Thinking... ⚡")
+    ai_reply = None
+    
+    for model_name in MODELS_POOL:
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages_payload,
+                max_tokens=150
+            )
+            if response and response.choices:
+                ai_reply = response.choices.message.content
+                if ai_reply:
+                    break
+        except Exception:
+            continue
 
-    except Exception as e:
-        await context.bot.edit_message_text(
-            chat_id=update.effective_chat.id,
-            message_id=processing_msg.message_id,
-            text=f"Error: {str(e)}"
-        )
+    if ai_reply:
+        # STRICT FORCE CLEANING: Script formats (Labels) ko delete karna
+        cleaned_reply = ai_reply
+        for label in ["Neha:", "Gaurav:", "Tu:", "Assistant:", "Shakshi:"]:
+            cleaned_reply = cleaned_reply.replace(label, "")
+        if ":" in cleaned_reply and len(cleaned_reply.split(":")[0]) < 12:
+            cleaned_reply = cleaned_reply.split(":")[-1] # Strip any accidental script tags
+            
+        cleaned_reply = cleaned_reply.strip()
+        CONVO_MEMORY[user_id].append({"role": "assistant", "content": cleaned_reply})
+        
+        try:
+            bot.edit_message_text(cleaned_reply, chat_id=message.chat.id, message_id=processing_msg.message_id)
+        except Exception:
+            bot.send_message(message.chat.id, cleaned_reply)
+    else:
+        bot.edit_message_text("All servers are busy, try in 5 seconds! ⏳", chat_id=message.chat.id, message_id=processing_msg.message_id)
 
-# --- 6. MAIN EXECUTION ---
 if __name__ == '__main__':
     keep_alive()
-    
-    TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
-    if not TOKEN:
-        print("Error: TELEGRAM_BOT_TOKEN not found!")
-    else:
-        app_bot = ApplicationBuilder().token(TOKEN).build()
-        
-        app_bot.add_handler(CommandHandler("helpful", set_attitude))
-        app_bot.add_handler(CommandHandler("rude", set_attitude))
-        app_bot.add_handler(CommandHandler("flirt", set_attitude))
-        app_bot.add_handler(CommandHandler("angry", set_attitude))
-        app_bot.add_handler(CommandHandler("status", check_status))
-        
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_reply))
-        
-        print("Bot Started with multiple attitudes...")
-        app_bot.run_polling()
+    print("Neha is starting on Render...")
+    bot.infinity_polling()
