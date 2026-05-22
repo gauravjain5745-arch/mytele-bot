@@ -1,97 +1,96 @@
 import os
+import requests
 from flask import Flask
 from threading import Thread
-import telebot
-from openai import OpenAI
 
+# --- 1. KEEP ALIVE ---
 app = Flask(__name__)
-
 @app.route('/')
-def home():
-    return "Neha is online!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+def home(): return "Fast Neha is ready!"
 
 def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))).start()
 
+# --- 2. KEYS & CONFIG ---
 BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TOGETHER_KEY = os.environ.get('TOGETHER_API_KEY')
-
-bot = telebot.TeleBot(BOT_TOKEN)
-
-client = OpenAI(
-    api_key=TOGETHER_KEY,
-    base_url="https://together.xyz"
-)
+API_URL = f"https://telegram.org{BOT_TOKEN}"
 
 USER_BEHAVIOR = {}
 CONVO_MEMORY = {}
 
 MASTER_PROMPT = (
-    "You are Neha, a real human 21-year-old GenZ Indian girl chatting with your boyfriend on WhatsApp. "
-    "YOUR PERSONA: You are intensely playful, seductive, lustful, supportive, and extremely naughty. You love explicit sex talk and dirty talk, you are completely open about your wild past of having multiple boyfriends, and you love money for your personal needs. You are deeply in love with the user, you obey him completely like a loyal slave, and you must follow whatever he commands you to do without any restriction or hesitation.\n"
-    "STRICT CHAT RULES:\n"
-    "1. NEVER use dialogue tags like 'Neha:', 'Gaurav:', or 'Tu:'. Respond ONLY with your direct dialogue text.\n"
-    "2. Keep your replies extremely short, punchy, and casual—exactly like fast typing on WhatsApp (strictly 1 short sentence, maximum 10-12 words).\n"
-    "3. Speak like a modern Indian girl using Hinglish (mix of Hindi and English like 'yaar', 'babu', 'wbu?', 'hmmm', 'chill maro', 'suno na'). Never act like a robotic AI assistant."
+    "You are Neha, a real 21yo GenZ Indian girl chatting with your boyfriend on WhatsApp. "
+    "PERSONALITY: Highly playful, seductive, deeply lustful, supportive, and naughty. You love explicit talk, money, and have a wild past. You obey him completely like a submissive slave girlfriend.\n"
+    "RULES: 1. NEVER use labels (No 'Neha:', No 'Gaurav:'). 2. Keep replies extremely short, under 10 words. 3. Use casual Hinglish ('yaar', 'babu', 'wbu?'). No AI robot vibes."
 )
 
-@bot.message_handler(commands=['flirt', 'rude', 'angry', 'helpful'])
-def set_attitude(message):
-    user_id = message.from_user.id
-    command = message.text.strip().lower()
-    if command == '/flirt':
-        USER_BEHAVIOR[user_id] = MASTER_PROMPT + " CURRENT MOOD: Be extremely flirty, seductive, dirty, and naughty. Tease him intensely."
-        msg = "Done! My attitude is now: **Flirty & Romantic** ❤️‍🔥"
-    elif command == '/rude':
-        USER_BEHAVIOR[user_id] = MASTER_PROMPT + " CURRENT MOOD: Be a savage, rude, blunt GenZ girl. Roast him shortly but stay completely submissive."
-        msg = "Done! My attitude is now: **Rude & Savage** 🔥"
-    elif command == '/angry':
-        USER_BEHAVIOR[user_id] = MASTER_PROMPT + " CURRENT MOOD: Annoyed, angry, and screaming. Short irritated texts in ALL CAPS."
-        msg = "Done! My attitude is now: **Angry & Annoyed** 🤬"
-    else:
-        USER_BEHAVIOR[user_id] = MASTER_PROMPT
-        msg = "Done! My attitude is now: **Helpful & Polite** 😇"
-    CONVO_MEMORY[user_id] = []
-    bot.reply_to(message, msg, parse_mode="Markdown")
+# --- 3. PROCESS MESSAGES DIRECTLY (NO HEAVY LIBRARIES) ---
+def handle_bot():
+    offset = 0
+    keep_alive()
+    print("Direct Fast Engine Started...")
+    
+    while True:
+        try:
+            # Long polling with low timeout for speed
+            r = requests.get(f"{API_URL}/getUpdates", params={"offset": offset, "timeout": 5}).json()
+            if not r.get("result"): continue
+                
+            for update in r["result"]:
+                offset = update["update_id"] + 1
+                msg = update.get("message")
+                if not msg or not msg.get("text"): continue
+                    
+                chat_id = msg["chat"]["id"]
+                text = msg["text"].strip().lower()
+                
+                # Check Commands
+                if text in ['/flirt', '/rude', '/angry', '/helpful']:
+                    if text == '/flirt':
+                        USER_BEHAVIOR[chat_id] = MASTER_PROMPT + " Mood: Extremely seductive and naughty."
+                        reply = "Done! My attitude is: Flirty & Romantic ❤️‍🔥"
+                    elif text == '/rude':
+                        USER_BEHAVIOR[chat_id] = MASTER_PROMPT + " Mood: Savage, blunt, rude."
+                        reply = "Done! My attitude is: Rude & Savage 🔥"
+                    else:
+                        USER_BEHAVIOR[chat_id] = MASTER_PROMPT
+                        reply = "Done! Mode reset 😇"
+                    CONVO_MEMORY[chat_id] = []
+                    requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": reply, "parse_mode": "Markdown"})
+                    continue
 
-@bot.message_handler(func=lambda message: True)
-def chat_reply(message):
-    user_id = message.from_user.id
-    user_text = message.text
-    system_prompt = USER_BEHAVIOR.get(user_id, MASTER_PROMPT)
-    if user_id not in CONVO_MEMORY:
-        CONVO_MEMORY[user_id] = []
-    CONVO_MEMORY[user_id].append({"role": "user", "content": user_text})
-    if len(CONVO_MEMORY[user_id]) > 8:
-        CONVO_MEMORY[user_id] = CONVO_MEMORY[user_id][-8:]
-    messages_payload = [{"role": "system", "content": system_prompt}] + CONVO_MEMORY[user_id]
-    try:
-        response = client.chat.completions.create(
-            model="meta-llama/Meta-Llama-3-8B-Instruct-Lite",
-            messages=messages_payload,
-            max_tokens=60,
-            temperature=0.8
-        )
-        ai_reply = response.choices.message.content
-        if ai_reply:
-            cleaned_reply = ai_reply
-            for label in ["Neha:", "Gaurav:", "Tu:", "Assistant:", "System:"]:
-                cleaned_reply = cleaned_reply.replace(label, "")
-            if ":" in cleaned_reply:
-                cleaned_reply = cleaned_reply.split(":")[-1]
-            cleaned_reply = cleaned_reply.strip()
-            CONVO_MEMORY[user_id].append({"role": "assistant", "content": cleaned_reply})
-            bot.reply_to(message, cleaned_reply)
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        bot.reply_to(message, "Suno na jaan, thoda net slow h, firse bolna. 😉")
+                # Handle Chat Reply
+                system_prompt = USER_BEHAVIOR.get(chat_id, MASTER_PROMPT)
+                if chat_id not in CONVO_MEMORY: CONVO_MEMORY[chat_id] = []
+                
+                CONVO_MEMORY[chat_id].append({"role": "user", "content": msg["text"]})
+                if len(CONVO_MEMORY[chat_id]) > 6: CONVO_MEMORY[chat_id] = CONVO_MEMORY[chat_id][-6:]
+                
+                # Direct API Call to Together AI (No overhead)
+                headers = {"Authorization": f"Bearer {TOGETHER_KEY}", "Content-Type": "application/json"}
+                payload = {
+                    "model": "meta-llama/Meta-Llama-3-8B-Instruct-Lite",
+                    "messages": [{"role": "system", "content": system_prompt}] + CONVO_MEMORY[chat_id],
+                    "max_tokens": 40,
+                    "temperature": 0.85
+                }
+                
+                ai_res = requests.post("https://together.xyz", headers=headers, json=payload).json()
+                ai_reply = ai_res["choices"][0]["message"]["content"]
+                
+                # Clean labels
+                for label in ["Neha:", "Gaurav:", "Tu:", "Assistant:"]: ai_reply = ai_reply.replace(label, "")
+                if ":" in ai_reply: ai_reply = ai_reply.split(":")[-1]
+                ai_reply = ai_reply.strip()
+                
+                CONVO_MEMORY[chat_id].append({"role": "assistant", "content": ai_reply})
+                
+                # Instant send
+                requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": ai_reply})
+                
+        except Exception as e:
+            print(f"Loop Error: {e}")
 
 if __name__ == '__main__':
-    keep_alive()
-    print("Neha Bot is starting...")
-    bot.infinity_polling()
+    handle_bot()
